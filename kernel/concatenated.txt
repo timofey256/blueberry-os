@@ -1,0 +1,2576 @@
+===== FILE: include/abi.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2021 Charles University
+
+#ifndef _ABI_H
+#define _ABI_H
+
+/** Stack alignment for RISC-V is 128 bits (16 B) in the standard ABI  */
+#define ABI_STACK_ALIGNMENT 16
+
+#endif
+
+
+===== FILE: include/adt/align.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _ADT_ALIGN_H
+#define _ADT_ALIGN_H
+
+#include <types.h>
+
+/** Align given address up to the given power-of-two alignment. */
+static inline uintptr_t uintptr_align_up(uintptr_t addr, unative_t align) {
+    return (addr + align - 1) & ~(align - 1);
+}
+
+/** Align given address down to the given power-of-two alignment. */
+static inline uintptr_t uintptr_align_down(uintptr_t addr, unative_t align) {
+    return (addr) & ~(align - 1);
+}
+
+/** Align given size up to the given power-of-two alignment. */
+static inline size_t size_align_up(size_t size, unative_t align) {
+    return (size + align - 1) & ~(align - 1);
+}
+
+#endif
+
+
+===== FILE: include/adt/list.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _ADT_LIST_H
+#define _ADT_LIST_H
+
+#include <debug.h>
+#include <types.h>
+
+/*
+ * A doubly linked list whose link pointers are embedded inside the item type.
+ *
+ * To define an item type that can be placed inside the list, include the link_t member in the item type:
+ *
+ * typedef struct my_item {
+ *     ...
+ *     link_t my_list_link;
+ *     ...
+ * } my_item_t;
+ *
+ * The list is represented by the list_t type, which contains the head and tail pointers.
+ * An empty list is initialized using the list_init function, which is the same as declaring
+ * a variable of the list_t type and setting the head and tail pointers to itself:
+ *
+ * list_t my_list;
+ * list_init(&my_list);
+ *
+ * Functions that manipulate the list use pointers to the link member,
+ * rather than pointers to the list item, to address the list elements:
+ *
+ * my_item_t *item;
+ * list_append(&my_list, &item->my_list_link);
+ *
+ * The list_item macro converts a pointer to the link member to a pointer to the list item:
+ *
+ * link_t *link = list_pop(&my_list);
+ * my_item_t *item = list_item(link, my_item_t, my_list_link);
+ *
+ * The list_foreach macro iterates over the list elements similar to a for loop:
+ *
+ * list_foreach (my_list, my_item_t, my_list_link, item) {
+ *     do_something_with(item);
+ * }
+ *
+ */
+
+/** Compute the offset of a member in a structure
+ *
+ * @param type   The type of the container structure a member is embedded in.
+ * @param member The name of the member within the structure.
+ *
+ * @return Offset of the member in the structure.
+ *
+ */
+#define list_offset_of(type, member) \
+    ((size_t)(&((type*)0)->member))
+
+/** Cast a member of a structure to the containing structure
+ *
+ * @param ptr    The pointer to the member.
+ * @param type   The type of the container structure a member is embedded in.
+ * @param member The name of the member within the structure.
+ *
+ * @return Container structure.
+ *
+ */
+#define list_container_of(ptr, type, member) \
+    ({ \
+        const __typeof__(((type*)0)->member)* __mptr = (ptr); \
+        (type*)((const unsigned char*)__mptr - list_offset_of(type, member)); \
+    })
+
+/** Get list item
+ *
+ * Get a typed structure from the given list item.
+ *
+ * @param link   Pointer to the list item.
+ * @param type   The type of the structure the item is embedded in.
+ * @param member The name of the member of the item within
+ *               the containing structure.
+ *
+ * @return Typed structure corresponding to the list item.
+ *
+ */
+#define list_item(link, type, member) \
+    list_container_of(link, type, member)
+
+/** Iterate over list members
+ *
+ * @param list     The list to iterate over.
+ * @param type     The type of the structure the item is embedded in.
+ * @param member   The name of the member of the item within
+ *                 the containing structure.
+ * @param iterator The name of the iterator to declare.
+ *
+ */
+#define list_foreach(list, type, member, iterator) \
+    for (type* iterator = NULL; iterator == NULL; iterator = (type*)1) \
+        for (link_t* _link = (list).head.next; \
+                iterator = list_item(_link, type, member), \
+                     _link != &(list).head; \
+                _link = _link->next)
+
+/** Polymorphic list link
+ *
+ */
+typedef struct link {
+    struct link* prev;
+    struct link* next;
+} link_t;
+
+/** Polymorphic list link
+ *
+ */
+typedef struct {
+    link_t head;
+} list_t;
+
+/** Checked list link initialization
+ *
+ * Initialize a list item.
+ *
+ * @param link The list item to initialize.
+ *
+ */
+static inline void link_init(link_t* link) {
+    assert(link != NULL);
+
+    link->prev = NULL;
+    link->next = NULL;
+}
+
+/** Checked list initialization
+ *
+ * Initialize a list. An empty list points back
+ * to itself for easy runtime checks.
+ *
+ * @param list The list head to initialize.
+ *
+ */
+static inline void list_init(list_t* list) {
+    assert(list != NULL);
+
+    list->head.prev = &list->head;
+    list->head.next = &list->head;
+}
+
+/** Test whether a list item is connected
+ *
+ * @param link The list item to examine.
+ *
+ * @return True if the list item is connected to a list.
+ *
+ */
+static inline bool link_is_connected(const link_t* link) {
+    assert(link != NULL);
+
+    return ((link->prev != NULL) && (link->next != NULL));
+}
+
+/** Test whether a list is empty
+ *
+ * @param list The list to examine.
+ *
+ * @return True if the list is empty.
+ *
+ */
+static inline bool list_is_empty(const list_t* list) {
+    assert(list != NULL);
+
+    return (list->head.next == &list->head);
+}
+
+static inline size_t list_get_size(const list_t* list) {
+    size_t result = 0;
+    for (link_t* link = list->head.next; link != &(list->head); link = link->next) {
+        result++;
+    }
+    return result;
+}
+
+/** Prepend item to the list
+ *
+ * Prepend a new item to the beginning of a list.
+ *
+ * @param list The list to prepend to.
+ * @param link The new item link.
+ *
+ */
+static inline void list_prepend(list_t* list, link_t* link) {
+    assert(list != NULL);
+    assert(link != NULL);
+
+    link->next = list->head.next;
+    link->prev = &list->head;
+
+    list->head.next->prev = link;
+    list->head.next = link;
+}
+
+/** Append item to the list
+ *
+ * Append a new item to the endof a list.
+ *
+ * @param list The list to append to.
+ * @param link The new item link.
+ *
+ */
+static inline void list_append(list_t* list, link_t* link) {
+    assert(list != NULL);
+    assert(link != NULL);
+
+    link->next = &list->head;
+    link->prev = list->head.prev;
+
+    list->head.prev->next = link;
+    list->head.prev = link;
+}
+
+/** Remove an item from a list
+ *
+ * Remove an item from any list it is currently part of.
+ *
+ * @param link The item link to remove.
+ *
+ */
+static inline void list_remove(link_t* link) {
+    assert(link != NULL);
+
+    if (link_is_connected(link)) {
+        link->next->prev = link->prev;
+        link->prev->next = link->next;
+    }
+
+    link_init(link);
+}
+
+/** Pop an item from the list
+ *
+ * Remove the first item from the list.
+ *
+ * @param list The list to pop from.
+ *
+ * @return The first item.
+ *
+ */
+static inline link_t* list_pop(list_t* list) {
+    assert(list != NULL);
+
+    if (list_is_empty(list))
+        return NULL;
+
+    link_t* item = list->head.next;
+
+    list_remove(item);
+    return item;
+}
+
+/** Rotate the list by making its head into its tail
+ *
+ * @param list The list to rotate.
+ *
+ * @return The rotated item.
+ *
+ */
+static inline link_t* list_rotate(list_t* list) {
+    assert(list != NULL);
+
+    if (list_is_empty(list))
+        return NULL;
+
+    /*
+     * Simply remove the first item from the list
+     * and append it back to the end of the list.
+     * Not the most efficient way but functional
+     * nonetheless.
+     */
+
+    link_t* item = list_pop(list);
+    list_append(list, item);
+
+    return item;
+}
+
+#endif
+
+
+===== FILE: include/debug.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _DEBUG_H
+#define _DEBUG_H
+
+#include <drivers/machine.h>
+#include <lib/print.h>
+
+/* Helper macros. */
+#define QUOTE_ME_(x) #x
+#define QUOTE_ME(x) QUOTE_ME_(x)
+
+/*
+ * dprintk works like printk but also adds source code information.
+ */
+#ifdef KERNEL_DEBUG
+#define dprintk(fmt, ...) \
+    printk("[DEBUG " __FILE__ ":" QUOTE_ME(__LINE__) " %s()] " fmt, \
+            __func__, ##__VA_ARGS__)
+#else
+#define dprintk(...) ((void)0)
+#endif
+
+/*
+ * When assertion in kernel fails, we halt the machine.
+ */
+#define assert(expr) \
+    do { \
+        if (!(expr)) { \
+            puts("Assert failed at " __FILE__ ":" QUOTE_ME(__LINE__) ": " #expr); \
+            machine_halt_via_debugger(); \
+        } \
+    } while (0)
+
+/*
+ * Panic functions to halt the machine from unrecoverable errors.
+ */
+
+#define panic_if(expr, fmt, ...) \
+    do { \
+        if ((expr)) { \
+            printk("Kernel panic: " fmt "\n", ##__VA_ARGS__); \
+            puts("Location: " __FILE__ ":" QUOTE_ME(__LINE__)); \
+            puts("Condition: " #expr); \
+            machine_halt_via_debugger(); \
+        } \
+    } while (0)
+
+#define panic(fmt, ...) \
+    do { \
+        printk("Kernel panic: " fmt "\n", ##__VA_ARGS__); \
+        puts("Location: " __FILE__ ":" QUOTE_ME(__LINE__)); \
+        machine_halt_via_debugger(); \
+    } while (0)
+
+#endif
+
+
+===== FILE: include/debug/code.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _DEBUG_CODE_H
+#define _DEBUG_CODE_H
+
+#include <types.h>
+
+/** Get current value of stack pointer. */
+static inline uintptr_t debug_get_stack_pointer(void) {
+    register uintptr_t sp __asm__("sp");
+    return sp;
+}
+
+void debug_dump_function(const char* name, uintptr_t address, size_t instruction_count);
+
+#endif
+
+
+===== FILE: include/drivers/csr.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2023 Charles University
+
+#ifndef _DRIVERS_CSR_H_
+#define _DRIVERS_CSR_H_
+
+/** Bitmask that signifies that the MPP
+ *  (machine previous privilege) is set to M (machine mode) in MSTATUS CSR
+ */
+#define CSR_MSTATUS_MPP_M 0x1800
+
+/** The CSR number of the MEPC (machine exception program counter) CSR */
+#define CSR_MEPC 0x341
+/** The CSR number of the MCAUSE (machine cause) CSR */
+#define CSR_MCAUSE 0x342
+/** The CSR number of the MTVAL (machine trap value) CSR */
+#define CSR_MTVAL 0x343
+
+#endif
+
+
+===== FILE: include/drivers/machine.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _DRIVERS_MACHINE_H
+#define _DRIVERS_MACHINE_H
+
+/** MSIM-specific instruction for dumping general registers. */
+#define machine_dump_rd_asm .word 0x8C100073
+
+/** MSIM-specific instruction for halting the simulation (power-off). */
+#define machine_halt_asm .word 0x8C000073
+
+/** MSIM-specific instruction for entering interactive mode. */
+#define machine_enter_debugger_asm ebreak
+
+/** MSIM-specific instruction for dumping CSR indexed by t0. */
+#define machine_dump_csr_t0_asm .word 0x8C4002F3
+
+#ifndef __ASSEMBLER__
+
+/** Halts the (virtual) machine. */
+static __attribute__((noreturn)) inline void machine_halt(void) {
+    __asm__ volatile(".word 0x8C000073\n");
+    while (1) {
+        // Unreachable but required by the compiler
+    }
+}
+
+/** Enter MSIM interactive mode. */
+static inline void machine_enter_debugger(void) {
+    __asm__ volatile("ebreak\n");
+}
+
+/** Enter MSIM interactive mode and then halt MSIM. */
+static __attribute__((noreturn)) inline void machine_halt_via_debugger(void) {
+    machine_enter_debugger();
+    machine_halt();
+}
+
+/** Start dumping executed instructions to MSIM output */
+static inline void machine_set_trace(void) {
+    __asm__ volatile(".word 0x8C200073\n");
+}
+
+/** Stop dumping executed instructions to MSIM output */
+static inline void machine_reset_trace(void) {
+    __asm__ volatile(".word 0x8C300073\n");
+}
+
+/** Dump the specified CSR by number
+ *
+ * @param csr_num The number of the CSR to dump
+ */
+static inline void machine_dump_csr_by_num(int csr_num) {
+    /* Use custom instruction which dumps a CSR that
+     * is specified by its number in a register (in this case t0)
+     */
+    __asm__ volatile(
+            "mv t0, %0\n"
+            ".word 0x8C4002F3\n"
+            :
+            : "r"(csr_num)
+            : "t0");
+}
+
+#endif
+
+#endif
+
+
+===== FILE: include/drivers/printer.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _DRIVERS_PRINTER_H_
+#define _DRIVERS_PRINTER_H_
+
+/** Console hardware address.
+ *
+ * Note that this is a virtual address used by C code. The address is from
+ * kernel region and does not require any special setup of virtual memory
+ * translation.
+ */
+#define PRINTER_ADDRESS (0x90000000)
+
+#ifndef __ASSEMBLER__
+
+/** Display a single character.
+ *
+ * @param c The character to display.
+ */
+static inline void printer_putchar(const char c) {
+    (*(volatile char*)PRINTER_ADDRESS) = c;
+}
+
+#endif
+#endif
+
+
+===== FILE: include/errno.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _ERRNO_H
+#define _ERRNO_H
+
+#include <types.h>
+
+typedef enum {
+    EOK = 0,
+    ENOIMPL = 1,
+    ENOMEM = 2,
+    EBUSY = 3,
+    EEXITED = 4,
+    EKILLED = 5,
+    ENOENT = 6,
+    EINVAL = 7,
+} errno_t;
+
+static inline const char* errno_as_str(errno_t err) {
+    switch (err) {
+    case EOK:
+        return "no error";
+    case ENOIMPL:
+        return "not implemented";
+    case ENOMEM:
+        return "out of memory";
+    case EBUSY:
+        return "resource is busy";
+    case EEXITED:
+        return "thread already exited";
+    case EKILLED:
+        return "thread was killed";
+    case ENOENT:
+        return "no such entry";
+    case EINVAL:
+        return "invalid value";
+    default:
+        return "unknown error";
+    }
+}
+
+#endif
+
+
+===== FILE: include/ktest.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _KTEST_H
+#define _KTEST_H
+
+#include <debug.h>
+#include <errno.h>
+#include <lib/print.h>
+
+/*
+ * Prefixes for test output, used by the check_output.py script.
+ */
+#define KTEST_EXPECTED "[EXPECTED]: "
+#define KTEST_BLOCK_EXPECTED "[EXPECTED BLOCK]: "
+#define KTEST_ACTUAL "[ ACTUAL ]: "
+
+/** Prints the header of a kernel test. */
+#define ktest_start(name) \
+    puts("== KERNEL TEST " name " ==")
+
+/** Prints a message about passed kernel test. */
+#define ktest_passed() \
+    puts("\n\nTest finished.\n\n")
+
+/** Prints a message about failed kernel test and halts the CPU. */
+#define ktest_failed() \
+    do { \
+        puts("\n\nTest failed.\n\n"); \
+        machine_halt(); \
+    } while (0)
+
+/** Kernel test assertion.
+ *
+ * Unlike a normal assertion, this one is always checked and the
+ * machine is halted when expr does not evaluate to true.
+ */
+#define ktest_assert(expr, fmt, ...) \
+    do { \
+        if (!(expr)) { \
+            puts("\n\n" __FILE__ ":" QUOTE_ME(__LINE__) ": Kernel test assertion failed: " #expr); \
+            printk(__FILE__ ":" QUOTE_ME(__LINE__) ": " fmt "\n", ##__VA_ARGS__); \
+            ktest_failed(); \
+        } \
+    } while (0)
+
+/** Kernel test assertion for bound checking. */
+#define ktest_assert_in_range(msg, value, lower, upper) \
+    ktest_assert(((value) >= (lower)) && ((value) <= (upper)), \
+            "%s: " #value "=%d not in [" #lower "=%d, " #upper "=%d] range", \
+            msg, value, lower, upper)
+
+/** Kernel test asserting for error codes. */
+#define ktest_assert_errno(value, last_operation_name) \
+    ktest_assert((value) == EOK, "%s unexpectedly failed with %d (%s)", \
+            last_operation_name, (value), errno_as_str(value))
+
+/** Kernel test signature.
+ *
+ * All kernel tests share this signature. This is possible
+ * because only one test is compiled at a time.
+ */
+void kernel_test(void);
+
+#endif
+
+
+===== FILE: include/ktest/heap.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _KTEST_HEAP_H
+#define _KTEST_HEAP_H
+
+#include <adt/list.h>
+#include <mm/heap.h>
+#include <mm/self.h>
+
+#ifdef KERNEL_TEST_PROBE_MEMORY_MAINMEM_SIZE_KB
+#define KTEST_MAX_HEAP_SIZE ((KERNEL_TEST_PROBE_MEMORY_MAINMEM_SIZE_KB) * (1024))
+#else
+#define KTEST_MAX_HEAP_SIZE (512 * 1024 * 1024)
+#endif
+
+#define ktest_check_kmalloc_total(allocated_total) \
+    do { \
+        ktest_assert(allocated_total < (KTEST_MAX_HEAP_SIZE), "allocated too much memory: %d bytes (max at %d)", allocated_total, KTEST_MAX_HEAP_SIZE); \
+    } while (0)
+
+#define ktest_check_kmalloc_result(addr_ptr, size) \
+    do { \
+        uintptr_t __addr = (uintptr_t)addr_ptr; \
+        uintptr_t __addr_end_of_kernel_image = kernel_get_image_end(); \
+        unsigned long long __addr_end = __addr + (size); \
+        ktest_assert((__addr >= 0x80000000) && (__addr < 0xA0000000), \
+                #addr_ptr " (0x%x) not in kernel segment [0x80000000, 0xA0000000)", __addr); \
+        ktest_assert((__addr_end >= 0x80000000) && (__addr_end < 0xA0000000), \
+                #addr_ptr " + " #size " (0x%x + %dB) not in kernel segment [0x80000000, 0xA0000000)", __addr, (size)); \
+        ktest_assert((__addr % 4) == 0, "bad alignment on 0x%x", __addr); \
+        ktest_assert(__addr >= __addr_end_of_kernel_image, \
+                #addr_ptr " (0x%x) is inside kernel image (ends at 0x%x)", \
+                __addr, __addr_end_of_kernel_image); \
+    } while (0)
+
+#define ktest_check_kmalloc_writable(addr_ptr) \
+    do { \
+        volatile uint8_t* __ptr = (uint8_t*)addr_ptr; \
+        __ptr[0] = 0xAA; \
+        __ptr[1] = 0x55; \
+        ktest_assert(__ptr[0] == 0xAA, "expected 0xAA, got 0x%x at %p", __ptr[0], addr_ptr); \
+        ktest_assert(__ptr[1] == 0x55, "expected 0x55, got 0x%x at %p", __ptr[1], addr_ptr); \
+    } while (0)
+
+#define ktest_check_kmalloc_block(addr_ptr, size) \
+    do { \
+        ktest_check_kmalloc_result(addr_ptr, size); \
+        ktest_check_kmalloc_writable(addr_ptr); \
+    } while (0)
+
+typedef struct {
+    link_t link;
+} ktest_allocated_heap_block_t;
+
+static inline ktest_allocated_heap_block_t* ktest_allocated_heap_block_create(size_t size) {
+    ktest_allocated_heap_block_t* result = kmalloc(size);
+    dprintk("kmalloc(%u) = %pA\n", size, result);
+
+    if (result != NULL) {
+        link_init(&result->link);
+    }
+
+    return result;
+}
+
+static inline void ktest_allocated_heap_block_free_list(list_t* block_list) {
+    while (!list_is_empty(block_list)) {
+        link_t* first = list_pop(block_list);
+        ktest_allocated_heap_block_t* block = list_item(first, ktest_allocated_heap_block_t, link);
+        dprintk("kfree(%pA)\n", block);
+        kfree(block);
+    }
+}
+
+#endif
+
+
+===== FILE: include/ktest/leak.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2024 Charles University
+
+#ifndef _KTEST_LEAK_H
+#define _KTEST_LEAK_H
+
+#include <types.h>
+
+typedef void (*leak_checking_func_t)(void*);
+
+/**
+ * Execute a simple leak checking run.
+ *
+ * The test is rather trivial in its implementation but should catch at
+ * least the most common bugs and omissions in the code.
+ *
+ * The important idea is that we supply our own implementation of allocation
+ * functions (such as kmalloc) and hence we are able to check that all objects
+ * are actually returned (kfreed). That means that for the check to work
+ * the standard functions should NOT be linked with the kernel.
+ *
+ * Note that our implementation of kmalloc etc. is trivial and uses a statically
+ * defined array as a backing storage. This will not work for large tests but
+ * we are okay with that so far.
+ *
+ * The actual check is performed in the following way. The user provides a
+ * function and we will check that this function (when executed) releases all
+ * allocated resources. The function must be as idempotent as possible as
+ * it will be called multiple times.
+ *
+ * Firstly, the provided function is called and inside our allocation functions
+ * (kmalloc) we record the amount of allocations done.
+ *
+ * Then we call this function in a loop and in each loop we record address of
+ * every allocated object but we also fail some allocations (see below). At the
+ * end of the loop, we check that all allocated objects were returned.
+ * Currently, the implementation deterministically fails n-th allocation in n-th
+ * loop and fails no allocation in the last loop. That should catch the most
+ * common bugs: not freeing a properly destroyed object and not freeing all
+ * resources when further allocations fail (e.g. if we allocate a thread
+ * structure but fail to allocate a stack, we should release the structure
+ * as well).
+ */
+void ktest_leak_check(leak_checking_func_t func, void* data);
+
+#endif
+
+
+===== FILE: include/ktest/thread.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _KTEST_THREAD_H
+#define _KTEST_THREAD_H
+
+#include <debug.h>
+#include <proc/thread.h>
+
+#define ktest_thread_join(thread, retval) \
+    ((dprintk("Joining thread %pT...\n", (thread))), thread_join((thread), (retval)))
+
+#define ktest_thread_join_checked(thread, retval) \
+    do { \
+        errno_t ___thread_join_err = ktest_thread_join((thread), (retval)); \
+        ktest_assert_errno(___thread_join_err, "thread_join(" #thread ")"); \
+    } while (0)
+
+#define ktest_thread_create_checked(thread_out, entry_func, entry_arg, flags, name) \
+    do { \
+        errno_t ___thread_create_err = thread_create( \
+                (thread_out), (entry_func), (entry_arg), (flags), (name)); \
+        ktest_assert_errno(___thread_create_err, \
+                "thread_create(" #thread_out ", " #entry_func "(" #entry_arg "))"); \
+        dprintk("Created thread %pT (entry %s(%s), flags %d).\n", \
+                *(thread_out), #entry_func, #entry_arg, (flags)); \
+    } while (0)
+
+#endif
+
+
+===== FILE: include/lib/print.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _LIB_PRINT_H
+#define _LIB_PRINT_H
+
+void printk(const char* format, ...);
+int isdigit(const char c);
+void puts(const char* s);
+void fputs(const char* s);
+
+#endif
+
+
+===== FILE: include/lib/runtime.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _LIB_RUNTIME_H
+#define _LIB_RUNTIME_H
+
+/*
+ * Declarations of functions needed for division of long long values.
+ */
+
+unsigned long long __udivdi3(unsigned long long, unsigned long long);
+unsigned long long __umoddi3(unsigned long long, unsigned long long);
+long long __divdi3(long long, long long);
+long long __moddi3(long long, long long);
+
+#endif
+
+
+===== FILE: include/lib/stdarg.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _LIB_STDARG_H_
+#define _LIB_STDARG_H_
+
+/* The va_* macros and functions rely on compiler intrinsics. */
+
+typedef __builtin_va_list va_list;
+
+#define va_start(ap, last) __builtin_va_start(ap, last)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#define va_end(ap) __builtin_va_end(ap)
+#define va_copy(dst, src) __builtin_va_copy(dst, src)
+
+#endif
+
+
+===== FILE: include/lib/string.h =====
+#ifndef LIB_STRING_H
+#define LIB_STRING_H
+
+#include <types.h>
+
+void *memset(void *dest, int value, size_t num);
+void *memcpy(void *dest, const void *src, size_t num);
+char *strcpy(char *dest, const char *src);
+
+#endif
+
+
+===== FILE: include/main.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _MAIN_H
+#define _MAIN_H
+
+#include <types.h>
+
+void kernel_main(void);
+
+#endif
+
+
+===== FILE: include/mm/heap.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _MM_HEAP_H
+#define _MM_HEAP_H
+
+#include <types.h>
+
+typedef struct block_header {
+    uint32_t magic;
+    size_t payload_size;
+    bool free;
+    struct block_header* next;
+    struct block_header* previous;
+} block_header_t;
+
+void heap_init(void);
+void* kmalloc(size_t size);
+void kfree(void* ptr);
+
+#endif
+
+
+===== FILE: include/mm/self.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2021 Charles University
+
+#ifndef _MM_SELF_H
+#define _MM_SELF_H
+
+/** Where the entrypoint to the kernel lies */
+#define KERNEL_ENTRYPOINT 0x80001000
+
+#ifndef __ASSEMBLER__ /* Don't include the following in assembler */
+
+#include <adt/align.h>
+#include <types.h>
+
+/** Address at the kernel end.
+ *
+ * Prefer to use kernel_get_image_end() to read this value.
+ *
+ * The symbol is defined in the linker script, the actual value is provided during linking.
+ * The type of the symbol (a zero-length array of bytes) is chosen to suggest that there
+ * may be some bytes there but we do not know how many.
+ */
+extern uint8_t _kernel_end[0];
+
+/** Get address at the kernel end.
+ *
+ * This address returns first memory address after kernel code (including space for global
+ * variables etc.) where it is safe to allocate memory.
+ */
+static inline uintptr_t kernel_get_image_end(void) {
+    return uintptr_align_up((uintptr_t)_kernel_end, 32);
+}
+
+#endif
+#endif
+
+
+===== FILE: include/proc/context.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _PROC_CONTEXT_H
+#define _PROC_CONTEXT_H
+
+/*
+ * This file is shared between C and assembler sources, because we
+ * want to keep information on low-level structures in the same file.
+ * We use ifdefs to include the portions relevant to each context.
+ */
+
+/** Size of the context_t structure below, needed in assembler code. */
+#define CONTEXT_SIZE (14 * 4)
+
+#ifndef __ASSEMBLER__
+
+#include <types.h>
+#include <lib/string.h>
+
+/**
+ * CPU context
+ *
+ * This context structure is used for switching between threads in the
+ * kernel. We could save all the registers, but most of them have been
+ * already saved on the stack by the compiler.
+ *
+ * This is because the RISC-V ABI mandates that a function only needs
+ * to preserve the callee-saved temporaries ($s1-$11), the stack pointer
+ * ($sp), and the frame pointer ($fp, which is also considered $s0 in case
+ * a function does not use a frame pointer). We also need to preserve
+ * the return address ($ra). Preserving other registers across a
+ * function call is the responsibility of the caller.
+ *
+ * From the perspective of the C compiler, context switch is just a
+ * function call, so if the compiler wants to preserve registers other
+ * than those listed, it must save them on the stack before the call.
+ * This also holds for all callers higher up in the call stack.
+ */
+typedef struct {
+    // Callee-saved temporaries (s0-s11 + sp).
+    unative_t s0;
+    unative_t s1;
+    unative_t s2;
+    unative_t s3;
+    unative_t s4;
+    unative_t s5;
+    unative_t s6;
+    unative_t s7;
+    unative_t s8;
+    unative_t s9;
+    unative_t s10;
+    unative_t s11;
+
+    unative_t sp;
+    unative_t ra;
+} context_t;
+
+void context_init(context_t* ctx, uintptr_t stack_top);
+void cpu_switch_context(context_t* this_context, context_t* next_context);
+
+#else /* __ASSEMBLER__ */
+// clang-format off
+
+/*
+ * The register offsets MUST match the context_t structure.
+ */
+.set CONTEXT_S0_OFFSET,  0*4
+.set CONTEXT_S1_OFFSET,  1*4
+.set CONTEXT_S2_OFFSET,  2*4
+.set CONTEXT_S3_OFFSET,  3*4
+.set CONTEXT_S4_OFFSET,  4*4
+.set CONTEXT_S5_OFFSET,  5*4
+.set CONTEXT_S6_OFFSET,  6*4
+.set CONTEXT_S7_OFFSET,  7*4
+.set CONTEXT_S8_OFFSET,  8*4
+.set CONTEXT_S9_OFFSET,  9*4
+.set CONTEXT_S10_OFFSET, 10*4
+.set CONTEXT_S11_OFFSET, 11*4
+
+.set CONTEXT_SP_OFFSET, 12*4
+.set CONTEXT_RA_OFFSET, 13*4
+
+
+/*
+ * The CONTEXT_SAVE_GENERAL_REGISTERS macro stores general registers
+ * into the context_t structure. The macro can be used with any general
+ * purpose register (no registers are destroyed in this code).
+ */
+.macro CONTEXT_SAVE_GENERAL_REGISTERS base
+
+    sw s0,  CONTEXT_S0_OFFSET(\base)
+    sw s1,  CONTEXT_S1_OFFSET(\base)
+    sw s2,  CONTEXT_S2_OFFSET(\base)
+    sw s3,  CONTEXT_S3_OFFSET(\base)
+    sw s4,  CONTEXT_S4_OFFSET(\base)
+    sw s5,  CONTEXT_S5_OFFSET(\base)
+    sw s6,  CONTEXT_S6_OFFSET(\base)
+    sw s7,  CONTEXT_S7_OFFSET(\base)
+    sw s8,  CONTEXT_S8_OFFSET(\base)
+    sw s9,  CONTEXT_S9_OFFSET(\base)
+    sw s10, CONTEXT_S10_OFFSET(\base)
+    sw s11, CONTEXT_S11_OFFSET(\base)
+
+    sw ra, CONTEXT_RA_OFFSET(\base)
+    sw sp, CONTEXT_SP_OFFSET(\base)
+
+
+.endm CONTEXT_SAVE_GENERAL_REGISTERS
+
+
+/*
+ * The CONTEXT_LOAD_GENERAL_REGISTERS macro loads general registers from
+ * the context_t structure. The macro \base parameter should be a register
+ * that is different from the registers being restored. The $sp register is
+ * an exception, because it is restored last (on purpose).
+ *
+ * Also keep in mind that the macro restores the stack pointer, which means
+ * that it will switch to another stack.
+ */
+.macro CONTEXT_LOAD_GENERAL_REGISTERS base
+
+    lw s0,  CONTEXT_S0_OFFSET(\base)
+    lw s1,  CONTEXT_S1_OFFSET(\base)
+    lw s2,  CONTEXT_S2_OFFSET(\base)
+    lw s3,  CONTEXT_S3_OFFSET(\base)
+    lw s4,  CONTEXT_S4_OFFSET(\base)
+    lw s5,  CONTEXT_S5_OFFSET(\base)
+    lw s6,  CONTEXT_S6_OFFSET(\base)
+    lw s7,  CONTEXT_S7_OFFSET(\base)
+    lw s8,  CONTEXT_S8_OFFSET(\base)
+    lw s9,  CONTEXT_S9_OFFSET(\base)
+    lw s10, CONTEXT_S10_OFFSET(\base)
+    lw s11, CONTEXT_S11_OFFSET(\base)
+
+    lw ra, CONTEXT_RA_OFFSET(\base)
+    lw sp, CONTEXT_SP_OFFSET(\base)
+
+.endm CONTEXT_LOAD_GENERAL_REGISTERS
+
+// clang-format on
+#endif /* __ASSEMBLER__ */
+
+#endif
+
+
+===== FILE: include/proc/context_helpers.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _PROC_CONTEXT_HELPERS_H
+#define _PROC_CONTEXT_HELPERS_H
+
+#include <lib/string.h>
+
+void cpu_switch_context(context_t* this_context, context_t* next_context);
+
+#endif
+
+
+===== FILE: include/proc/scheduler.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _PROC_SCHEDULER_H
+#define _PROC_SCHEDULER_H
+
+#include <proc/thread.h>
+
+void scheduler_init(void);
+void scheduler_add_ready_thread(thread_t* id);
+void scheduler_remove_thread(thread_t* id);
+void scheduler_schedule_next(void);
+
+#endif
+
+
+===== FILE: include/proc/thread.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _PROC_THREAD_H
+#define _PROC_THREAD_H
+
+#include <errno.h>
+#include <types.h>
+#include <proc/context.h>
+#include <adt/list.h>
+
+/** Thread stack size.
+ *
+ * Set quite liberally because stack overflows are notoriously
+ * difficult to debug (and difficult to detect too).
+ */
+#define THREAD_STACK_SIZE 4096
+
+/** Max length of a thread name (excluding the terminating zero). */
+#define THREAD_NAME_MAX_LENGTH 31
+
+typedef enum thread_state {
+    READY,
+    RUNNING,
+    BLOCKED,
+    FINISHED
+} thread_state_t;
+
+/** Thread entry function (similar to pthreads). */
+typedef void* (*thread_entry_func_t)(void*);
+
+/** Information about any existing thread. */
+typedef struct thread thread_t;
+
+struct thread {
+    char name[THREAD_NAME_MAX_LENGTH + 1];
+    thread_entry_func_t entry_func;
+    thread_state_t state;
+
+    void* arg;
+    void* return_value;
+
+    size_t stack_size;
+    uintptr_t stack_ptr;
+
+    context_t* ctx; 
+
+    link_t thread_link;
+};
+
+void threads_init(void);
+void thread_trampoline(void);
+
+errno_t thread_create(thread_t** thread, thread_entry_func_t entry, void* data, unsigned int flags, const char* name);
+
+thread_t* thread_get_current(void);
+void thread_yield(void);
+void thread_suspend(void);
+void thread_finish(void* retval) __attribute__((noreturn));
+bool thread_has_finished(thread_t* thread);
+
+errno_t thread_wakeup(thread_t* thread);
+errno_t thread_join(thread_t* thread, void** retval);
+void thread_switch_to(thread_t* thread);
+
+errno_t thread_kill(thread_t* thread);
+
+#endif
+
+
+===== FILE: include/types.h =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#ifndef _TYPES_H
+#define _TYPES_H
+
+/*
+ * All-in-one header for common types.
+ *
+ * Note that the type definitions rely heavily on our
+ * knowledge of the compiler configuration.
+ *
+ * We include static asserts to catch any violations
+ * of our assumptions.
+ */
+
+#define NULL ((void*)0)
+#define WORD_SIZE 4
+
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+
+typedef signed short int16_t;
+typedef unsigned short uint16_t;
+
+typedef signed long int32_t;
+typedef unsigned long uint32_t;
+
+typedef signed long long int64_t;
+typedef unsigned long long uint64_t;
+
+typedef int32_t native_t;
+typedef uint32_t unative_t;
+typedef uint32_t uintptr_t;
+typedef uint32_t off_t;
+typedef uint32_t size_t;
+typedef int32_t ssize_t;
+
+#define bool _Bool
+#define false 0
+#define true 1
+#define WORD_SIZE 4
+
+typedef enum block_state {
+    OCCUPIED = 0,
+    FREE = 1
+} block_state_t;
+
+#define _CHECK_TYPE_SIZE(type, expected_size) \
+    _Static_assert(sizeof(type) == expected_size, #type " should be " #expected_size "B")
+
+_CHECK_TYPE_SIZE(bool, 1);
+_CHECK_TYPE_SIZE(int8_t, 1);
+_CHECK_TYPE_SIZE(uint8_t, 1);
+_CHECK_TYPE_SIZE(int16_t, 2);
+_CHECK_TYPE_SIZE(uint16_t, 2);
+_CHECK_TYPE_SIZE(int32_t, 4);
+_CHECK_TYPE_SIZE(uint32_t, 4);
+_CHECK_TYPE_SIZE(int64_t, 8);
+_CHECK_TYPE_SIZE(uint64_t, 8);
+
+#endif
+
+
+===== FILE: boot/loader.S =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+/*
+ * System bootstrap code.
+ *
+ * When RV32IMA is started, it starts executing code at physical address
+ * 0xF0000000 in M-mode.
+ *
+ * This code prepares the environment and jumps to the kernel code.
+ */
+
+#include <mm/self.h>
+
+
+.section .loader
+
+/*
+ * The execution of the simulator starts here in M-mode.
+ *
+ * We only jump to our kernel entry point where the setup is done.
+ */
+__start:
+    /* Jump to known kernel entrypoint */
+    li t0, KERNEL_ENTRYPOINT
+    jr 0(t0)
+
+
+===== FILE: src/debug/code.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <debug/code.h>
+#include <lib/print.h>
+
+/** Dump function code at given address.
+ *
+ * Generally, the output should look like disassembly without
+ * mnemonics part.
+ *
+ * @param name Function name to print in header.
+ * @param address Function address.
+ * @instruction_count How many instructions to print.
+ */
+void debug_dump_function(const char* name, uintptr_t address, size_t instruction_count) {
+    printk("%x <%s>:\n", address, name);
+    uintptr_t* functions = (uintptr_t*)address;
+    for (size_t i = 0; i < instruction_count; ++i) {
+        printk("%x:        %08x\n", address + 4 * i, (unsigned long)(functions[i]));
+    }
+}
+
+
+===== FILE: src/debug/padding.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2020 Charles University
+
+#include <types.h>
+
+#ifndef KERNEL_PADDING_HEAD
+#define KERNEL_PADDING_HEAD 0
+#endif
+
+uint32_t _kernel_padding_head[KERNEL_PADDING_HEAD] __attribute__((section(".kernel_padding_head")));
+
+#ifndef KERNEL_PADDING_TAIL
+#define KERNEL_PADDING_TAIL 0
+#endif
+
+uint32_t _kernel_padding_tail[KERNEL_PADDING_TAIL] __attribute__((section(".kernel_padding_tail")));
+
+
+===== FILE: src/head.S =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <drivers/csr.h>
+#include <drivers/machine.h>
+
+
+.section .handlers
+
+/*
+ * Machine-mode trap handler.
+ *
+ * Services any exceptions/interrupts not delegated to supervisor mode.
+ *
+ * This handler runs in M-mode and simply dumps general purpose registers
+ * together with 'mepc', 'mcause' and 'mtval' CSRs. Then it enters MSIM
+ * interactive mode to allow the user to inspect registers, memory or
+ * anything else of interest. Finally, it halts the simulator, because
+ * there is nothing else to be done.
+ */
+.balign 4
+machine_trap_handler:
+    // Dump general registers.
+    machine_dump_rd_asm
+
+    // Dump relevant Control and Status Registers (CSRs).
+    li t0, CSR_MEPC
+    machine_dump_csr_t0_asm
+    li t0, CSR_MCAUSE
+    machine_dump_csr_t0_asm
+    li t0, CSR_MTVAL
+    machine_dump_csr_t0_asm
+
+    // Switch MSIM to interactive mode first, then halt it.
+    machine_enter_debugger_asm
+    machine_halt_asm
+
+
+.section .head
+
+/*
+ * Kernel entry point (the boot loader code at 0xF0000000 jumps here).
+ *
+ * The Machine Trap-Vector Base-Address (mtvec) register are set to address of
+ * the machine mode trap handler. Because the lowest two bits of the handler
+ * addresses will be zero (due to 4-byte alignment), the vector MODE field is
+ * set to 'direct', which means that all exceptions cause the processor to jump
+ * to the trap handler BASE address.
+ *
+ * The MODE field in the Supervisor Address Translation and Protection (satp)
+ * register is set to zero (`bare` mode), which disables address translation
+ * in supervisor mode, thus providing identity mapping without page tables.
+ *
+ * Prior to jumping to kernel C code, the stack pointer is initialized so that
+ * the area immediately preceding the 'start' entry point becomes an initial
+ * 4-KiB stack (which should be enough for everybody).
+ *
+ * The final jump to the kernel C entry point ('kernel_main' function) does not
+ * change the processor privilege mode in any way (the code continues to run
+ * in 'machine' mode).
+ */
+.org 0x1000
+start:
+    // Set M-mode trap handler base, use 'direct' vector mode.
+    la t0, machine_trap_handler
+    csrw mtvec, t0
+
+    // Enable 'bare' mode to disable address translation.
+    // Requires all other bits in 'satp' to be zero.
+    csrw satp, zero
+
+    // Setup initial stack and jump to kernel C code in 'kernel_main'.
+    la sp, start
+    jal ra, kernel_main
+
+
+    // Paranoia: this is unreachable, but just in case...
+    machine_halt_asm
+    loop:
+        j loop
+
+
+===== FILE: src/lib/print.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <adt/list.h>
+#include <debug.h>
+#include <drivers/printer.h>
+#include <lib/print.h>
+#include <lib/stdarg.h>
+#include <mm/heap.h>
+
+const char SMALL_ALPHABET_OFFSET = 'a';
+const char LARGE_ALPHABET_OFFSET = 'A';
+const unsigned long HEXADECIMAL_BASE = 16;
+const unsigned long DECIMAL_BASE = 10;
+const int MAX_BUFFER_SIZE = 2 * sizeof(long int); // we don'tuse uint_64 or long long but maybe it should be it
+
+int isdigit(const char c) {
+    if (c >= '0' && c <= '9')
+        return 1;
+    return 0;
+}
+
+void fputs(const char* s) {
+    while (*s != '\0') {
+        printer_putchar(*s);
+        s++;
+    }
+}
+
+void puts(const char* s) {
+    fputs(s);
+    printer_putchar('\n');
+}
+
+static void printk_num_with_padding(unsigned long num, const unsigned long base, const char alphabet_offset, int width, const char padding) {
+    char buffer[MAX_BUFFER_SIZE];
+    int i = 0;
+    do {
+        unsigned long remainder = num % base;
+        buffer[i++] = (remainder < 10) ? remainder + '0' : (remainder - 10) + alphabet_offset;
+        num /= base;
+    } while (num != 0);
+    while (i < width) {
+        printer_putchar(padding);
+        --width;
+    }
+    while (i--) {
+        printer_putchar(buffer[i]);
+    }
+}
+
+static void printk_num(unsigned long num, const unsigned long base, const char alphabet_offset) {
+    printk_num_with_padding(num, base, alphabet_offset, 0, ' ');
+}
+
+static void printk_num_with_hex_pref(unsigned long number, const char alphabet_offset) {
+    fputs("0x");
+    printk_num(number, HEXADECIMAL_BASE, alphabet_offset);
+}
+
+static void proces_memory_block(va_list* argp_pointer, const char** pointer_to_it) {
+    ++*pointer_to_it;
+    const block_header_t* header_pointer = va_arg(*argp_pointer, const block_header_t*);
+    printk("Block addr: %p = [free: %s, size: %u, prev: %p, next: %p]\n", (void*)header_pointer, (header_pointer->free == FREE) ? "YES" : "NO", header_pointer->payload_size, (void*)header_pointer->previous, (void*)header_pointer->next);
+}
+
+static void process_function(va_list* argp_pointer, const char** pointer_to_it) {
+    ++*pointer_to_it;
+    const void* function = va_arg(*argp_pointer, const void*);
+    const unsigned long* address = (unsigned long*)function;
+    printk_num_with_hex_pref((unsigned long)address, SMALL_ALPHABET_OFFSET);
+    printer_putchar('[');
+    for (int i = 0; i < 4; ++i) {
+        if (i > 0)
+            printer_putchar(' ');
+        printk_num_with_padding((unsigned long)address[i], HEXADECIMAL_BASE, SMALL_ALPHABET_OFFSET, 8, '0');
+    }
+    printer_putchar(']');
+}
+
+static void process_list(va_list* argp_pointer, const char** pointer_to_it) { // needs some work
+    ++*pointer_to_it;
+    const list_t* list = va_arg(*argp_pointer, const list_t*);
+    printk_num_with_hex_pref((unsigned long)list, SMALL_ALPHABET_OFFSET);
+    if (list_is_empty(list)) {
+        fputs("[empty]");
+    } else {
+        printer_putchar('[');
+        printk_num(list_get_size(list), DECIMAL_BASE, SMALL_ALPHABET_OFFSET);
+        fputs(": ");
+        for (link_t* link = list->head.next; link != &(list->head); link = link->next) {
+            if (link != list->head.next)
+                printer_putchar('-');
+            printk_num_with_hex_pref((unsigned long)link, SMALL_ALPHABET_OFFSET);
+        }
+        printer_putchar(']');
+    }
+}
+
+static void process_number(va_list* argp_pointer, const char** pointer_to_it) {
+    char padding = ' ';
+    int width = 0;
+    unsigned long num;
+    if (**pointer_to_it == '0') {
+        padding = '0';
+        ++*pointer_to_it;
+    }
+    while (**pointer_to_it >= '0' && **pointer_to_it <= '9') {
+        width = width * 10 + (**pointer_to_it - '0');
+        ++*pointer_to_it;
+    }
+    if (**pointer_to_it == 'd') {
+        int numint = va_arg(*argp_pointer, int);
+        if (numint < 0)
+            printer_putchar('-');
+        num = (numint < 0) ? (unsigned long)(-(long)numint) : (unsigned long)(numint);
+    } else {
+        num = va_arg(*argp_pointer, unsigned int);
+    }
+    char alphabet_offset = (**pointer_to_it == 'X') ? LARGE_ALPHABET_OFFSET : SMALL_ALPHABET_OFFSET;
+    unsigned long base = (**pointer_to_it == 'u' || **pointer_to_it == 'd') ? DECIMAL_BASE : HEXADECIMAL_BASE;
+    printk_num_with_padding(num, base, alphabet_offset, width, padding);
+}
+
+static void process_pointers(va_list* argp_pointer, const char** pointer_to_it) {
+    const char next = *(*pointer_to_it + 1);
+    switch (next) {
+    case 'A': {
+        proces_memory_block(argp_pointer, pointer_to_it);
+    } break;
+    case 'F': {
+        process_function(argp_pointer, pointer_to_it);
+    } break;
+    case 'L': {
+        process_list(argp_pointer, pointer_to_it);
+    } break;
+    default: {
+        void* pointer = va_arg(*argp_pointer, void*);
+        if (!pointer) {
+            fputs("(nil)");
+        } else {
+            unsigned long num = (unsigned long)pointer;
+            printk_num_with_hex_pref(num, SMALL_ALPHABET_OFFSET);
+        }
+    } break;
+    }
+}
+
+static void process_specifiers(va_list* argp_pointer, const char** pointer_to_it) {
+    if (isdigit(**pointer_to_it) || **pointer_to_it == 'd' || **pointer_to_it == 'u' || **pointer_to_it == 'X' || **pointer_to_it == 'x') {
+        process_number(argp_pointer, pointer_to_it);
+    } else if (**pointer_to_it == 'c') {
+        char chr = va_arg(*argp_pointer, int);
+        printer_putchar(chr);
+    } else if (**pointer_to_it == 'p') {
+        process_pointers(argp_pointer, pointer_to_it);
+    } else if (**pointer_to_it == 's') {
+        char* str = va_arg(*argp_pointer, char*);
+        if (str == NULL)
+            str = "(null)";
+        fputs(str);
+    } else {
+        printer_putchar(**pointer_to_it);
+    }
+}
+
+void printk(const char* format, ...) {
+    va_list argp;
+    va_start(argp, format);
+    for (const char* it = format; *it != '\0'; ++it) {
+        switch (*it) {
+        case '%': {
+            ++it;
+            process_specifiers(&argp, &it);
+        } break;
+        default: {
+            printer_putchar(*it);
+        } break;
+        }
+    }
+    va_end(argp);
+}
+
+
+===== FILE: src/lib/runtime.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <lib/runtime.h>
+
+static inline unsigned long long ll_abs(long long a) {
+    if (a < 0) {
+        return -a;
+    } else {
+        return a;
+    }
+}
+
+static inline int ll_simple_sgn(long long a) {
+    if (a >= 0) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static unsigned long long ull_div_and_mod(unsigned long long a,
+        unsigned long long b, unsigned long long* rem) {
+
+    if (b == 0) {
+        *rem = 0;
+        return 0;
+    }
+
+    if (a < b) {
+        *rem = a;
+        return 0;
+    }
+
+    int ull_size = sizeof(unsigned long long) * 8;
+    *rem = 0;
+    unsigned long long res = 0;
+
+    for (int steps = ull_size; steps > 0; steps--) {
+        *rem = ((*rem) << 1) | ((a >> (ull_size - 1)) & 0x1);
+        res <<= 1;
+
+        if (*rem >= b) {
+            *rem -= b;
+            res |= 0x1;
+        }
+        a <<= 1;
+    }
+
+    return res;
+}
+
+unsigned long long __udivdi3(unsigned long long a, unsigned long long b) {
+    unsigned long long unused_rem;
+    return ull_div_and_mod(a, b, &unused_rem);
+}
+
+unsigned long long __umoddi3(unsigned long long a, unsigned long long b) {
+    unsigned long long rem;
+    ull_div_and_mod(a, b, &rem);
+    return rem;
+}
+
+long long __divdi3(long long a, long long b) {
+    unsigned long long unused_rem;
+    unsigned long long res = ull_div_and_mod(ll_abs(a), ll_abs(b), &unused_rem);
+    if (ll_simple_sgn(a) == ll_simple_sgn(b)) {
+        return res;
+    } else {
+        return -res;
+    }
+}
+
+long long __moddi3(long long a, long long b) {
+    unsigned long long rem;
+    ull_div_and_mod(ll_abs(a), ll_abs(b), &rem);
+    if (a < 0) {
+        return -rem;
+    } else {
+        return rem;
+    }
+}
+
+
+===== FILE: src/lib/string.c =====
+#include <lib/string.h>
+
+void* memset(void *dest, int value, size_t num) {
+    unsigned char *ptr = dest;
+    while (num--) {
+        *ptr++ = (unsigned char)value;
+    }
+    return dest;
+}
+
+void* memcpy(void *dest, const void *src, size_t num) {
+    unsigned char *d = dest;
+    const unsigned char *s = src;
+    while (num--) {
+        *d++ = *s++;
+    }
+    return dest;
+}
+
+char* strcpy(char *dest, const char *src) {
+    char *d = dest;
+    while ((*d++ = *src++))
+        ;
+    return dest;
+}
+
+
+===== FILE: src/main.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <debug.h>
+#include <debug/code.h>
+#include <drivers/machine.h>
+#include <ktest.h>
+#include <lib/print.h>
+#include <main.h>
+#include <mm/heap.h>
+#include <proc/scheduler.h>
+#include <proc/thread.h>
+
+/** Kernel init thread.
+ *
+ * This is first real thread running. When this thread terminates,
+ * the whole system shuts down.
+ *
+ * When the code is compiled to run kernel test, we execute only
+ * that test and terminate.
+ */
+static void* init_thread(void* ignored) {
+#ifdef KERNEL_TEST
+    kernel_test();
+#else
+    printk("%s: Hello, World!\n", thread_get_current()->name);
+    dprintk("%pT: $sp = 0x%x\n", thread_get_current(), debug_get_stack_pointer());
+#endif
+    printk("\nHalt.\n");
+    machine_halt();
+
+    return NULL;
+}
+
+/** This is kernel C-entry point.
+ *
+ * The kernel boostrap code written in assembly jumps here. Note that this
+ * function runs on special stack and does not represent a real thread (yet).
+ */
+void kernel_main(void) {
+    heap_init();
+    scheduler_init();
+    threads_init();
+
+    thread_t* main_thread;
+    errno_t err = thread_create(&main_thread, init_thread, NULL, 0, "[INIT]");
+    panic_if(err != EOK, "init thread creation failed (%d: %s)", err, errno_as_str(err));
+
+    // Switch to the first thread.
+    scheduler_schedule_next();
+
+    // We are not a real thread here so we should never return here.
+    panic("unexpected return to kernel_main");
+}
+
+
+===== FILE: src/mm/heap.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <drivers/machine.h>
+#include <lib/print.h>
+#include <mm/heap.h>
+#include <mm/self.h>
+
+const uint32_t TEST = 0xABCDEFAB;
+const uint32_t PROBING_SIZE = 4096;
+const uint32_t MAGIC_NUMBER = 0xABCDABCD;
+const uint32_t MINIMUM_BYTES_OF_INFORMATION = WORD_SIZE;
+
+block_header_t* beginning_block = NULL;
+
+uintptr_t detect_end_of_available_memory(uintptr_t heap_start);
+
+static inline void heap_panic(const char* message) {
+    puts(message);
+    machine_halt();
+}
+
+static inline void check_header(const block_header_t* block_header) {
+    if (block_header == NULL)
+        heap_panic("heap: null header");
+    if (block_header->magic != MAGIC_NUMBER)
+        heap_panic("heap: header magic mismatch (corruption)");
+}
+
+uintptr_t detect_end_of_available_memory(uintptr_t heap_start) {
+    uintptr_t last_valid_address = heap_start;
+    uintptr_t current_address = heap_start;
+    while (1) {
+        volatile uint32_t* pointer = (uint32_t*)current_address;
+        uint32_t copy = *pointer;
+        *pointer = TEST;
+        if (*pointer != TEST)
+            break;
+        *pointer = copy;
+        last_valid_address = current_address;
+        current_address += PROBING_SIZE;
+    }
+    return last_valid_address;
+}
+
+/** Heap initialization.
+ *
+ * Called once during system boot.
+ */
+void heap_init(void) {
+    uintptr_t heap_start = kernel_get_image_end();
+    uintptr_t heap_end = detect_end_of_available_memory(heap_start);
+
+    beginning_block = (block_header_t*)heap_start; // the header begins at heap_start -> | header | payload |
+    beginning_block->magic = MAGIC_NUMBER;
+    beginning_block->payload_size = heap_end - heap_start - sizeof(block_header_t); // the memory blocks do not store the header in their size
+    beginning_block->free = FREE;
+    beginning_block->previous = NULL;
+    beginning_block->next = NULL;
+}
+
+/** Allocate size bytes on heap.
+ *
+ * The behavior when size is zero is not defined and none of the provided
+ * tests will ever call kmalloc with 0 as the parameter. The implementation may
+ * choose to return NULL or a unique pointer for such call (i.e., follow the
+ * C standard). Note that causing a kernel panic or not checking for such
+ * case at all is also a valid option.
+ *
+ * @param size Amount of memory to allocate.
+ * @return Pointer to allocated memory.
+ * @retval NULL Out of memory.
+ */
+void* kmalloc(size_t size) {
+    if (size == 0)
+        return NULL;
+    size += (size % WORD_SIZE == 0) ? 0 : WORD_SIZE - (size % WORD_SIZE); // rounding to address of form addresses divisible by WORD_SIZE (padding);
+    block_header_t* current_block = beginning_block;
+    while (current_block) {
+        if (current_block->free == FREE && current_block->payload_size >= size) {
+            void* curr_pay_blck_ptr = (void*)(current_block + 1); // automatic c arithmetic makes this move by sizeof(header)
+            uintptr_t inter_step = (uintptr_t)(curr_pay_blck_ptr);
+            size_t remaining_size_of_block = current_block->payload_size - (size);
+            if (remaining_size_of_block >= sizeof(block_header_t) + MINIMUM_BYTES_OF_INFORMATION) { // if the remaining size of block is big enough for at least header + WORD_SIZE byte of payload (information)
+                uintptr_t new_block_adress = inter_step + size;
+                block_header_t* new_block = (block_header_t*)(new_block_adress);
+                new_block->magic = MAGIC_NUMBER;
+                new_block->free = FREE;
+                new_block->payload_size = remaining_size_of_block - sizeof(block_header_t);
+                new_block->previous = current_block;
+                new_block->next = current_block->next;
+                if (current_block->next) {
+                    block_header_t* descendant_block = current_block->next;
+                    descendant_block->previous = new_block;
+                }
+                current_block->next = new_block;
+            }
+            current_block->free = OCCUPIED;
+            current_block->payload_size = size;
+            return curr_pay_blck_ptr;
+        }
+        current_block = current_block->next;
+    }
+    return NULL;
+}
+
+/** Free memory previously allocated by kmalloc.
+ *
+ * The behavior when ptr is NULL is not defined and none of the provided
+ * tests will ever call kfree with NULL as the parameter. Note that accepting
+ * NULL as a parameter follows the C standard behavior, i.e. everything that
+ * malloc can return can be passed to free. In the context of a kernel,
+ * aborting the execution on receiving NULL is also an option as that might
+ * signal an abnormal situation in a different module.
+ *
+ * @param ptr Pointer to memory to be freed.
+ */
+void kfree(void* ptr) {
+    if (ptr == NULL) {
+        /* tests said they won't pass NULL; accept it or assert */
+        heap_panic("heap: kfree(NULL)");
+        return;
+    }
+
+    uintptr_t ptr_adress = (uintptr_t)ptr;
+    uintptr_t block_header_adress = ptr_adress - sizeof(block_header_t);
+    block_header_t* block_header = (block_header_t*)block_header_adress;
+
+    check_header(block_header);
+
+    block_header->free = FREE;
+    block_header_t* child = block_header->next;
+
+    if (child && child->free == FREE) { // exists and is free
+        block_header->payload_size += (sizeof(block_header_t) + child->payload_size);
+        block_header->next = child->next;
+        if (child->next) {
+            block_header_t* grandchild = child->next;
+            grandchild->previous = block_header;
+        }
+        child = NULL;
+    }
+
+    block_header_t* parent = block_header->previous;
+    if (parent && parent->free == FREE) { // exists and is free
+        parent->payload_size += (block_header->payload_size + sizeof(block_header_t));
+        parent->next = block_header->next;
+        if (block_header->next) {
+            block_header_t* helper = block_header->next;
+            helper->previous = parent;
+        }
+        block_header = NULL;
+    }
+}
+
+
+===== FILE: src/proc/context.S =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <proc/context.h>
+
+.text
+
+/*
+ * void cpu_switch_context(
+ *     context_t * a0_this_context,
+ *     context_t * a1_next_context
+ * )
+ *
+ * Switches processor to another context. The first argument points to
+ * "this" context, i.e., the context structure where the current state
+ * of the CPU will be stored.
+ *
+ * The second argument points to the "next" context, from which the
+ * state of the CPU will be restored to resume execution.
+ *
+ * Note that from the perspective of the RISC-V ABI, the caller can only
+ * assume that this function will preserve the callee-saved registers
+ * s0-s11 along with sp and ra.
+ *
+ * We do not need to save the other registers here, because whoever needed
+ * them preserved had to save them on the stack earlier. This is why the
+ * context_t structure only contains the callee-saved registers.
+ */
+.globl cpu_switch_context
+
+cpu_switch_context:
+    /*
+     * Save the general-purpose registers into the context
+     * structure pointed to by $a0.
+     */
+    CONTEXT_SAVE_GENERAL_REGISTERS a0
+
+    /*
+     * Load the general-purpose registers from the target context.
+     * The register $a1 is not being restored so we can use it as
+     * a base register. Note that this switches to another stack!
+     */
+    CONTEXT_LOAD_GENERAL_REGISTERS a1
+
+    ret
+
+.end cpu_switch_context
+
+
+===== FILE: src/proc/context_helpers.c =====
+#include <proc/context.h>
+#include <proc/context_helpers.h>
+
+extern void thread_trampoline(void);
+
+void context_init(context_t* ctx, uintptr_t stack_top) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->sp = (unative_t)stack_top;
+    ctx->ra = (unative_t)thread_trampoline;
+}
+
+
+===== FILE: src/proc/scheduler.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <debug.h>
+#include <proc/scheduler.h>
+
+/** Initialize support for scheduling.
+ *
+ * Called once at system boot.
+ */
+void scheduler_init(void) {
+}
+
+/** Marks given thread as ready to be executed.
+ *
+ * It is expected that this thread would be added at the end
+ * of the queue to run in round-robin fashion.
+ *
+ * @param thread Thread to make runnable.
+ */
+void scheduler_add_ready_thread(thread_t* thread) {
+}
+
+/** Removes given thread from scheduling.
+ *
+ * Expected to be called when thread is suspended, terminates execution
+ * etc.
+ *
+ * @param thread Thread to remove from the queue.
+ */
+void scheduler_remove_thread(thread_t* thread) {
+}
+
+/** Switch to next thread in the queue. */
+void scheduler_schedule_next(void) {
+}
+
+
+===== FILE: src/proc/thread.c =====
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2019 Charles University
+
+#include <abi.h>
+#include <lib/string.h>
+#include <proc/context.h>
+#include <proc/context_helpers.h>
+#include <proc/scheduler.h>
+#include <proc/thread.h>
+#include <mm/heap.h>
+
+static thread_t main_thread;
+static uint8_t main_stack[THREAD_STACK_SIZE];
+static context_t main_ctx;
+thread_t* current_thread = NULL;
+
+extern void cpu_switch_context(context_t* from, context_t* to);
+
+/** Initialize support for threading.
+ *
+ * Called once at system boot.
+ */
+void threads_init(void) {
+    memset(&main_thread, 0, sizeof(thread_t));
+    strcpy(main_thread.name, "main");
+    main_thread.state        = RUNNING;
+    main_thread.entry_func   = NULL;
+    main_thread.arg          = NULL;
+    main_thread.return_value = NULL;
+
+    main_thread.stack_ptr    = (uintptr_t)(main_stack + THREAD_STACK_SIZE);
+    main_thread.stack_size   = THREAD_STACK_SIZE;
+
+    main_thread.ctx          = &main_ctx;                
+    link_init(&main_thread.thread_link);                 
+
+    context_init(main_thread.ctx, main_thread.stack_ptr);
+
+    current_thread = &main_thread;
+}
+
+
+void thread_trampoline(void) {
+    thread_t* t = thread_get_current();
+    void* rval = t->entry_func(t->arg);
+    t->return_value = rval;
+    thread_finish(rval);
+}
+
+/** Create a new thread.
+ *
+ * The thread is automatically placed into the queue of ready threads.
+ *
+ * This function allocates space for both stack and the thread_t structure
+ * (hence the double <code>**</code> in <code>thread_out</code>).
+ *
+ * @param thread_out Where to place the initialized thread_t structure.
+ * @param entry Thread entry function.
+ * @param data Data for the entry function.
+ * @param flags Flags (unused).
+ * @param name Thread name (for debugging purposes).
+ * @return Error code.
+ * @retval EOK Thread was created and started (added to ready queue).
+ * @retval ENOMEM Not enough memory to complete the operation.
+ * @retval EINVAL Invalid flags (unused).
+ */
+errno_t thread_create(thread_t** thread_out, thread_entry_func_t entry, void* data, unsigned int flags, const char* name) {
+    thread_t* t = kmalloc(sizeof(thread_t) + THREAD_STACK_SIZE);
+    if (t == NULL)
+        return ENOMEM;
+
+    uintptr_t stack_bottom = (uintptr_t)(t+1);
+    uintptr_t stack_top = stack_bottom + THREAD_STACK_SIZE;
+
+    uintptr_t sp = (uintptr_t)stack_top & ~(ABI_STACK_ALIGNMENT-1);
+
+    memset(t, 0, sizeof(*t));
+    strcpy(t->name, name);
+    t->entry_func = entry;
+    t->arg = data;
+    t->state = READY;
+    t->stack_ptr = sp;
+    t->stack_size = THREAD_STACK_SIZE;
+    t->ctx = kmalloc(sizeof(context_t));
+    if (!t->ctx) {
+        kfree(t);
+        return ENOMEM;
+    }
+    link_init(&t->thread_link);
+    context_init(t->ctx, sp);
+
+    scheduler_add_ready_thread(t);
+
+    *thread_out = t;
+    return EOK;
+}
+
+/** Return information about currently executing thread.
+ *
+ * @retval NULL When no thread was started yet.
+ */
+thread_t* thread_get_current(void) {
+    return current_thread;
+}
+
+/** Yield the processor. */
+void thread_yield(void) {
+}
+
+/** Current thread stops execution and is not scheduled until woken up. */
+void thread_suspend(void) {
+}
+
+/** Terminate currently running thread.
+ *
+ * Thread can (normally) terminate in two ways: by returning from the entry
+ * function or by calling this function. The parameter to this function then
+ * has the same meaning as the return value from the entry function.
+ *
+ * Note that this function never returns.
+ *
+ * @param retval Data to return in thread_join.
+ */
+void thread_finish(void* retval) {
+    while (1) {
+    }
+}
+
+/** Tells if a thread finished its execution.
+ *
+ * Thread finished the execution either when it returned from the entry
+ * function, called thread_finish() or was already killed.
+ *
+ * In other words, when this function returns true, thread_join() should
+ * return immediately (it is not required but it is a natural consequence
+ * of the above).
+ *
+ * This function may not be called when thread_join() was already called
+ * on the thread in question (because the thread pointer by that time will
+ * not be valid).
+ *
+ * @param thread Thread in question.
+ */
+bool thread_has_finished(thread_t* thread) {
+    return false;
+}
+
+/** Wakes-up existing thread.
+ *
+ * Note that waking-up a running (or ready) thread has no effect (i.e. the
+ * function shall not count wake-ups and suspends).
+ *
+ * Note that waking-up a thread does not mean that it will immediatelly start
+ * executing.
+ *
+ * @param thread Thread to wake-up.
+ * @return Error code.
+ * @retval EOK Thread was woken-up (or was already ready/running).
+ * @retval EEXITED Thread already finished its execution.
+ */
+errno_t thread_wakeup(thread_t* thread) {
+    return ENOIMPL;
+}
+
+/** Joins another thread (waits for it to terminate).
+ *
+ * Calling thread_join blocks until the thread we are joining
+ * (i.e. the parameter) terminates (either by being killed, finishing its
+ * entry function or calling thread_finish). It is not allowed to join the
+ * same thread from two places, where possible (see below) this should be
+ * detected and signalled via EBUSY return value.
+ *
+ * After thread_join returns, all pointers to the joined thread (i.e., to the
+ * thread_t structure given as parameter) are considered invalid and should
+ * not be used (including, but not limited to, calls to thread_finish,
+ * thread_join or thread_kill).
+ *
+ * Note that thread_create is an allocation function (like kmalloc) while
+ * thread_join is somewhat a deallocation function (like kfree). As with kfree,
+ * it does not make sense to call thread_join twice or use the pointer in any
+ * way after return as it is no longer valid.
+ *
+ * Implementation note: thread_join must release all memory allocated for the
+ * joined thread (assuming a successful join). While it is possible to release
+ * the thread stack earlier, the rest of the structure must remain valid until
+ * a call to thread_join. For example, thread_kill can release the stack of
+ * the killed thread because the thread no longer executes but releasing the
+ * stack inside thread_finish is not directly possible as the clean-up function
+ * still needs to use the stack (it would be possible to delegate the job to
+ * a special clean-up thread so that the stack is released as soon as possible
+ * but postponing the stack release to thread_join is a typical choice).
+ *
+ * Note that <code>retval</code> could be <code>NULL</code> if the caller
+ * is not interested in the returned value.
+ *
+ * @param thread Thread to wait for.
+ * @param retval Where to place the value returned from thread_finish.
+ * @return Error code.
+ * @retval EOK Thread was joined.
+ * @retval EBUSY Some other thread is already joining this one.
+ * @retval EINVAL The thread to join is invalid (including NULL and self).
+ * @retval EKILLED Thread was killed.
+ */
+errno_t thread_join(thread_t* thread, void** retval) {
+    return ENOIMPL;
+}
+
+/** Switch CPU context to a different thread.
+ *
+ * Note that this function must work even if there is no current thread
+ * (i.e. for the very first context switch in the system).
+ *
+ * @param thread Thread to switch to.
+ */
+#include <debug.h>
+#include <proc/thread.h>
+#include <proc/scheduler.h>
+#include <proc/context.h>
+
+extern thread_t* current_thread;
+
+/* A scratch context that captures the CPU state the first time we switch
+ * from the boot path (kernel_main) into a real thread. Its contents are
+ * meaningless before the first switch; context_switch() will populate it.
+ */
+static context_t boot_ctx;
+
+void thread_switch_to(thread_t* next)
+{
+    if (!next) return;
+    if (current_thread == next) return;
+
+    panic_if(next->ctx == NULL, "thread_switch_to: next->ctx is NULL");
+
+    thread_t* prev = current_thread;
+
+    /* Minimal state bookkeeping */
+    if (prev && prev->state == RUNNING)
+        prev->state = READY;
+    next->state = RUNNING;
+
+    current_thread = next;
+
+    if (prev == NULL) {
+        /* First switch in the system: save CPU state into boot_ctx and
+         * restore 'next'. This never returns until someone switches back.
+         */
+        cpu_switch_context(&boot_ctx, next->ctx);
+        /* If we ever come back here, somebody switched back to 'boot_ctx'. */
+        return;
+    } else {
+        /* Normal switch: save prev->ctx, restore next->ctx */
+        panic_if(prev->ctx == NULL, "thread_switch_to: prev->ctx is NULL");
+        cpu_switch_context(prev->ctx, next->ctx);
+        /* We resume here when another thread switches back to 'prev'. */
+        return;
+    }
+}
+
+/** Kills given thread.
+ *
+ * Note that this function shall work for any existing thread, including
+ * currently running one.
+ *
+ * Joining a killed thread results in EKILLED return value from thread_join.
+ *
+ * @param thread Thread to kill.
+ * @return Error code.
+ * @retval EOK Thread was killed.
+ * @retval EEXITED Thread already finished its execution.
+ */
+errno_t thread_kill(thread_t* thread) {
+    return ENOIMPL;
+}
+
+
+===== FILE: loader.lds =====
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2019 Charles University */
+
+OUTPUT_ARCH(riscv)
+
+SECTIONS {
+
+	.boot 0xF0000000 : {
+		*(.loader)
+		*(.text .text.*)
+		*(.data)
+		*(.rodata .rodata.*)
+		*(.bss .bss.*)
+		*(COMMON)
+		. = 0x1000;
+	}
+
+	/* Debugging information copied from default linker script */
+
+	.stab            0 : { *(.stab) }
+	.stabstr         0 : { *(.stabstr) }
+	.stab.excl       0 : { *(.stab.excl) }
+	.stab.exclstr    0 : { *(.stab.exclstr) }
+	.stab.index      0 : { *(.stab.index) }
+	.stab.indexstr   0 : { *(.stab.indexstr) }
+	.comment         0 : { *(.comment) }
+	.debug           0 : { *(.debug) }
+	.line            0 : { *(.line) }
+	.debug_srcinfo   0 : { *(.debug_srcinfo) }
+	.debug_sfnames   0 : { *(.debug_sfnames) }
+	.debug_aranges   0 : { *(.debug_aranges) }
+	.debug_pubnames  0 : { *(.debug_pubnames) }
+	.debug_info      0 : { *(.debug_info .gnu.linkonce.wi.*) }
+	.debug_abbrev    0 : { *(.debug_abbrev) }
+	.debug_line      0 : { *(.debug_line) }
+	.debug_frame     0 : { *(.debug_frame) }
+	.debug_str       0 : { *(.debug_str) }
+	.debug_loc       0 : { *(.debug_loc) }
+	.debug_macinfo   0 : { *(.debug_macinfo) }
+	.debug_weaknames 0 : { *(.debug_weaknames) }
+	.debug_funcnames 0 : { *(.debug_funcnames) }
+	.debug_typenames 0 : { *(.debug_typenames) }
+	.debug_varnames  0 : { *(.debug_varnames) }
+	.debug_pubtypes  0 : { *(.debug_pubtypes) }
+	.debug_ranges    0 : { *(.debug_ranges) }
+	.gnu.attributes  0 : { KEEP (*(.gnu.attributes)) }
+	.riscv.attributes 0 : { *(.riscv.attributes)}
+
+	/*
+	 * Discarded sections
+	 *
+	 * Some sections need to be explicitly discarded as a
+	 * workaround for objcopy errors. These sections are
+	 * not needed in the resulting binary or even make no
+	 * sense in this context anyway.
+	 */
+
+	/DISCARD/ : {
+		*(.eh_frame)
+		*(.reginfo)
+	}
+}
+
+
+===== FILE: kernel.lds =====
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2019 Charles University */
+
+OUTPUT_ARCH(riscv)
+
+SECTIONS {
+	PROVIDE (_kernel_start = 0x80000000);
+
+	/* Kernel image assembled from text and data sections */
+
+	.kernel 0x80000000 : {
+		/* Empty section at the start that is used for stack space */
+		*(.head)
+		*(.handlers)
+		/* The usual sections */
+		*(.kernel_padding_head)
+		*(.text .text.*)
+		_kernel_code_end = .;
+		*(.data)
+		*(.rodata .rodata.*)
+		*(.bss .bss.*)
+		*(COMMON)
+		*(.kernel_padding_tail)
+		_kernel_end = .;
+	}
+
+	/* Debugging information copied from default linker script */
+
+	.stab            0 : { *(.stab) }
+	.stabstr         0 : { *(.stabstr) }
+	.stab.excl       0 : { *(.stab.excl) }
+	.stab.exclstr    0 : { *(.stab.exclstr) }
+	.stab.index      0 : { *(.stab.index) }
+	.stab.indexstr   0 : { *(.stab.indexstr) }
+	.comment         0 : { *(.comment) }
+	.debug           0 : { *(.debug) }
+	.line            0 : { *(.line) }
+	.debug_srcinfo   0 : { *(.debug_srcinfo) }
+	.debug_sfnames   0 : { *(.debug_sfnames) }
+	.debug_aranges   0 : { *(.debug_aranges) }
+	.debug_pubnames  0 : { *(.debug_pubnames) }
+	.debug_info      0 : { *(.debug_info .gnu.linkonce.wi.*) }
+	.debug_abbrev    0 : { *(.debug_abbrev) }
+	.debug_line      0 : { *(.debug_line) }
+	.debug_frame     0 : { *(.debug_frame) }
+	.debug_str       0 : { *(.debug_str) }
+	.debug_loc       0 : { *(.debug_loc) }
+	.debug_macinfo   0 : { *(.debug_macinfo) }
+	.debug_weaknames 0 : { *(.debug_weaknames) }
+	.debug_funcnames 0 : { *(.debug_funcnames) }
+	.debug_typenames 0 : { *(.debug_typenames) }
+	.debug_varnames  0 : { *(.debug_varnames) }
+	.debug_pubtypes  0 : { *(.debug_pubtypes) }
+	.debug_ranges    0 : { *(.debug_ranges) }
+	.gnu.attributes  0 : { KEEP (*(.gnu.attributes)) }
+	.riscv.attributes 0 : { *(.riscv.attributes)}
+
+	/*
+	 * Discarded sections
+	 *
+	 * Some sections need to be explicitly discarded as a
+	 * workaround for objcopy errors. These sections are
+	 * not needed in the resulting binary or even make no
+	 * sense in this context anyway.
+	 */
+
+	/DISCARD/ : {
+		*(.eh_frame)
+		*(.reginfo)
+	}
+}
+
+
+===== FILE: Makefile =====
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2019 Charles University
+
+### Compiler, assembler and linker options
+#
+# All the options are described in detail in the GCC
+# and binutils documentation. A brief description of
+# some of the specific ones:
+#
+# -O2                         ... basic optimizations
+# -ffreestanding              ... a compilation without standard library and main()
+# -nostdlib                   ... do not look for standard library in system directories
+# -nostdinc                   ... do not look for standard header files in system directories
+# -fno-pic                    ... do not generate position independent code using $gp
+# -fno-builtin                ... do not recognize built-in functions without __builtin_ prefix
+# -mstrict-align              ... force strict alignment, because MSIM requires it
+# -mno-riscv-attribute        ... do not emit RISC-V attibute to record extra information into ELF objects
+# -msmall-data-limit=0        ... do not put small static data into a special section
+# -march=rv32g                ... enable only basic extensions
+#
+
+
+-include ../config.mk
+-include Makefile.depend
+
+CCFLAGS = -ffile-prefix-map=$(SRC_BASE)= -I$(SRC_BASE)include -march=rv32g -msmall-data-limit=0 -mstrict-align -fno-pic -mno-riscv-attribute -fno-builtin -ffreestanding -nostdlib -nostdinc -Wall -Wextra -Werror -Wno-unused-parameter -Wmissing-prototypes -Werror=pointer-arith -O2 -pipe -g3 -std=c11
+ASFLAGS = -I$(SRC_BASE)include -march=rv32g -msmall-data-limit=0 -mstrict-align -fno-pic -mno-riscv-attribute -fno-builtin -ffreestanding -nostdlib -nostdinc -Wall -Wextra -Werror -Wno-unused-parameter -Wmissing-prototypes -Werror=pointer-arith -pipe -g3 -std=c11 -D__ASM__
+LDFLAGS = -G 0 -static -g
+
+DEPEND = Makefile.depend
+DEPEND_PREV = Makefile.depend.prev
+
+### Kernel source files
+
+# Note that KERNEL_TEST_SOURCES and KERNEL_EXTRA_CFLAGS are defined in
+# config.mk as specified during configure.
+
+KERNEL_SOURCES = \
+	src/main.c \
+	src/head.S \
+	src/debug/code.c \
+	src/debug/padding.c \
+	src/lib/print.c \
+	src/lib/runtime.c \
+	src/lib/string.c \
+	src/proc/context.S \
+	src/proc/context_helpers.c \
+	src/proc/scheduler.c \
+	src/proc/thread.c
+
+ifeq ($(KERNEL_MEMORY_MANAGEMENT_IMPLEMENTATION),)
+KERNEL_MM_SOURCES = src/mm/heap.c
+else
+KERNEL_MM_SOURCES = $(KERNEL_MEMORY_MANAGEMENT_IMPLEMENTATION)
+endif
+
+BOOT_SOURCES = \
+	boot/loader.S
+
+KERNEL_OBJECTS := $(addsuffix .o,$(basename $(KERNEL_SOURCES) $(KERNEL_TEST_SOURCES) $(KERNEL_MM_SOURCES)))
+KERNEL_LINKER_SCRIPT = $(SRC_BASE)kernel.lds
+KERNEL_RAW = kernel.raw
+KERNEL_MAP = kernel.map
+KERNEL_BINARY = kernel.bin
+KERNEL_DISASM = kernel.disasm
+
+BOOT_OBJECTS := $(addsuffix .o,$(basename $(BOOT_SOURCES)))
+BOOT_LINKER_SCRIPT = $(SRC_BASE)loader.lds
+BOOT_RAW = loader.raw
+BOOT_MAP = loader.map
+BOOT_BINARY = loader.bin
+BOOT_DISASM = loader.disasm
+
+DEPS := $(addsuffix .dep,$(basename $(KERNEL_SOURCES) $(KERNEL_TEST_SOURCES) $(BOOT_SOURCES)))
+
+.PHONY: .FORCE all clean distclean dir-tree self-describe
+
+all: $(BOOT_BINARY) $(BOOT_DISASM) $(KERNEL_BINARY) $(KERNEL_DISASM)
+
+dir-tree:
+	for i in $(KERNEL_OBJECTS) $(BOOT_OBJECTS); do mkdir -p `dirname $$i`; done
+
+distclean: clean
+	rm -f $(KERNEL_BINARY) $(BOOT_BINARY)
+
+clean:
+	rm -f $(KERNEL_DISASM) $(KERNEL_MAP) $(KERNEL_RAW) $(BOOT_DISASM) $(BOOT_MAP) $(BOOT_RAW) $(GENERATOR_ASM) $(OFFSET_HEADER) $(DEPEND) $(DEPEND_PREV)
+	find . \( -name '*.o' -o -name '*.dep' \) -exec rm -f \{\} \;
+
+# Print self-configuration (used by other tools)
+self-describe:
+	@echo SOURCES $(KERNEL_SOURCES)
+	@echo CFLAGS $(CCFLAGS)
+
+-include $(DEPS)
+
+%.disasm: %.raw
+	$(OBJDUMP) -d -S $< > $@
+
+### Binary images
+#
+# The binary files are made in two stages. First, ELF files are
+# created from the object files. Next, the binary files are
+# created from the ELF files. The reasons for this are:
+#
+#  - The ELF files contain debugging information.
+#
+#  - Linking directly to a binary format does
+#    not produce errors on missing symbols.
+#
+
+%.bin: %.raw
+	$(OBJCOPY) -O binary $< $@
+
+$(BOOT_RAW): $(BOOT_LINKER_SCRIPT) $(BOOT_OBJECTS)
+	$(LD) $(LDFLAGS) -T $(BOOT_LINKER_SCRIPT) -Map $(BOOT_MAP) -o $@ $(BOOT_OBJECTS)
+
+$(KERNEL_RAW): $(KERNEL_LINKER_SCRIPT) $(KERNEL_OBJECTS)
+	$(LD) $(LDFLAGS) -T $(KERNEL_LINKER_SCRIPT) -Map $(KERNEL_MAP) -o $@ $(KERNEL_OBJECTS)
+
+### Default patterns
+
+%.o: %.c | dir-tree
+	$(CC) $(CCFLAGS) $(KERNEL_EXTRA_CFLAGS) -MD -MF $*.dep -c -o $@ $<
+
+%.o: %.S | dir-tree
+	$(CC) $(ASFLAGS) $(KERNEL_EXTRA_ASFLAGS) -c -o $@ $<
+
+
